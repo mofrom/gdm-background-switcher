@@ -3,5 +3,6 @@
 
 [ 黄家垚 / My_Other_Program](http://git.oschina.net/aliendata/My_Other_Program/tree/master/gnome_background_switcher)
 
-[archibold](http://archibold.io)
-将jpg格式图片放~/图片/Autowallpaper/目录下，然后执行脚本即可
+[archibold](http://archibolio)  
+
+将jpg格式图片放~/图片/Autowallpaper/目录下，然后执行脚本即可，有多个图片时，程序会自动选取一个作为背景
