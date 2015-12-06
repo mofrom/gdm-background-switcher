@@ -1,0 +1,864 @@
+#!/usr/bin/bash
+
+#                                _|        _|  _|                  _|        _|
+#     _|_|_|  _|  _|_|   _|_|_|  _|_|_|        _|_|_|      _|_|    _|    _|_|_|
+#   _|    _|  _|_|     _|        _|    _|  _|  _|    _|  _|    _|  _|  _|    _|
+#   _|    _|  _|       _|        _|    _|  _|  _|    _|  _|    _|  _|  _|    _|
+#     _|_|_|  _|         _|_|_|  _|    _|  _|  _|_|_|      _|_|    _|    _|_|_|
+#
+#
+#     by Andrea Giammarchi - @WebReflection - http://archibold.io/
+
+aurinstallation() {
+  local name=$1
+  local RESET="\033[0m"
+  local RED="\033[0;31m"
+  local GREEN="\033[0;32m"
+  local YELLOW="\033[1;33m"
+  local BOLD="\033[1m"
+  local AUR=$(curl -s -I $(getAURPackageNameAsURL $name) | grep '404')
+  if [ "$AUR" = "" ]; then
+    echo -e "Found an ${YELLOW}unknown${RESET} AUR ${BOLD}${1}${RESET} package."
+    read -n1 -r -p "Are you sure you would like to install it? [y/N]" AUR
+    if [ "$AUR" = "Y" ]; then
+      AUR="y"
+    fi
+    if [ "$AUR" = "y" ]; then
+      commonProcedure $name
+    fi
+  else
+    echo -e "${RED}[WARNING]${RESET} package ${BOLD}${1}${RESET} not found";
+    exit 1
+  fi
+}
+
+installation() {
+  local name=$1
+  local RESET="\033[0m"
+  local RED="\033[0;31m"
+  local GREEN="\033[0;32m"
+  local YELLOW="\033[1;33m"
+  local BOLD="\033[1m"
+  local AUR
+  case $name in
+    acroread)
+      sudo pacman -S --needed --noconfirm pangox-compat
+      downloadArchive 'acroread'
+      cd ~/Downloads/acroread
+      sed 's/pangox-compat/libcanberra/' <PKGBUILD >PKGBUILD.patched
+      mv PKGBUILD.patched PKGBUILD
+      makepkg -Asc --needed --noconfirm
+      sudo pacman -U --needed --noconfirm acroread*.pkg.tar.xz
+      removeArchive acroread
+      ;;
+    broadcom-wl-dkms)
+      sudo pacman -Syu --needed linux-headers dkms
+      sudo systemctl enable dkms.service
+      commonProcedure 'broadcom-wl-dkms'
+      ;;
+    dropbox)
+      sudo pacman -Syu --needed ufw-extras perl-file-mimeinfo
+      commonProcedure 'dropbox'
+      ;;
+    spotify)
+      sudo pacman -S --needed --noconfirm ffmpeg-compat
+      commonProcedure 'libgcrypt15'
+      commonProcedure 'libcurl-compat'
+      commonProcedure 'spotify'
+      ;;
+    sublime3)
+      commonProcedure 'sublime-text-nightly' 'sublime3'
+      mkdir -p /home/$USER/.config/sublime-text-3/Packages
+      if [ ! -d "/home/$USER/.config/sublime-text-3/Packages/Theme - Soda" ]; then
+        cd /home/$USER/.config/sublime-text-3/Packages
+        git clone https://github.com/buymeasoda/soda-theme/ "Theme - Soda"
+      fi
+      ;;
+    yaourt)
+      commonProcedure 'package-query'
+      commonProcedure 'yaourt'
+      ;;
+    *)
+      if [ "$(sudo pacman -Ssq $name | grep $name)" = "" ]; then
+        aurinstallation $name
+      else
+        sudo pacman -S --needed --noconfirm $name
+      fi
+      ;;
+  esac
+}
+
+updateLoginBackground() {
+  local IMAGE=$1
+  local CREATED_TMP="0"
+  local GST=/usr/share/gnome-shell/gnome-shell-theme.gresource
+  local GSTRES=$(basename $GST)
+  local WORKDIR=~/tmp/gdm-login-background
+  local r
+  if [ "$IMAGE" = "" ]; then
+    IMAGE=$(
+      dbus-launch gsettings get org.gnome.desktop.screensaver picture-uri |
+      sed -e "s/'//g" |
+      sed -e "s/^file:\/\///g"
+    )
+  fi
+  if [ ! -f $IMAGE ]; then
+    echo "unknown IMAGE $IMAGE"
+    exit 1
+  fi
+  if [ ! -d ~/tmp ]; then
+    mkdir -p ~/tmp
+    CREATED_TMP="1"
+  fi
+  mkdir -p $WORKDIR
+  cd $WORKDIR
+  mkdir -p theme
+  for r in `gresource list $GST`; do
+    gresource extract $GST $r >$WORKDIR$(echo $r | sed -e 's/^\/org\/gnome\/shell\//\//g')
+  done
+  cd theme
+  cp "$IMAGE" ./
+  sync
+  IMAGE=$(basename $IMAGE)
+
+  cat gnome-shell.css | sed -e 's/#lockDialogGroup/#lockDialogGroup-ignore/g' >gnome-shell.tmp
+
+  echo "
+#lockDialogGroup {
+  background: #2e3436 url(resource:///org/gnome/shell/theme/${IMAGE});
+  background-repeat: no-repeat;
+  background-size: cover; }" >>gnome-shell.tmp
+
+  sync
+  mv gnome-shell.tmp gnome-shell.css
+
+  echo '<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/gnome/shell/theme">' >"${GSTRES}.xml"
+  for r in `ls *.*`; do
+    echo "    <file>$r</file>" >>"${GSTRES}.xml"
+  done
+  echo '  </gresource>
+</gresources>' >>"${GSTRES}.xml"
+  sync
+  glib-compile-resources "${GSTRES}.xml"
+
+  sudo mv "/usr/share/gnome-shell/$GSTRES" "/usr/share/gnome-shell/${GSTRES}.backup"
+  sudo mv "$GSTRES" /usr/share/gnome-shell/
+
+  rm -r $WORKDIR
+
+  if [ "$CREATED_TMP" = "1" ]; then
+    rm -r ~/tmp
+  fi
+}
+
+findFromAURAndRemove() {
+  local name=$1
+  local pkg=
+  if [ -d ~/.archibold ]; then
+    for pkg in $(ls ~/.archibold/aur/); do
+      if [ "$(cat ~/.archibold/aur/$pkg/nick)" = "$name" ]; then
+        echo "$pkg"
+      fi
+    done
+  fi
+}
+
+getAURPackageNameAsURL() {
+  local name=$1
+  local type=${name:0:2}
+  echo "https://aur.archlinux.org/cgit/aur.git/snapshot/${name}.tar.gz"
+  # echo "https://aur.archlinux.org/packages/${type}/${name}/${name}.tar.gz"
+}
+
+getAURPackageVersion() {
+  local name=$1
+  local type=${name:0:2}
+  local pkg=$(curl -s -k -L "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=${name}")
+  # local pkg=$(curl -s -k -L "https://aur.archlinux.org/packages/${type}/${name}/PKGBUILD")
+  local pkgver=$(echo $pkg | sed -e 's/^.*\(pkgver=\([0-9a-z][0-9a-z.]*\)\).*$/\2/g')
+  local pkgrel=$(echo $pkg | sed -e 's/^.*\(pkgrel=\([0-9a-z][0-9a-z.]*\)\).*$/\2/g')
+  local epoch=$(echo $pkg | sed -e 's/^.*\(epoch=\([0-9a-z][0-9a-z.]*\)\).*$/\2/g')
+  if [ "${pkgrel:0:10}" = "${pkg:0:10}" ]; then
+    pkgrel=""
+  else
+    pkgrel="-$pkgrel"
+  fi
+  if [ "${epoch:0:10}" = "${pkg:0:10}" ]; then
+    epoch=""
+  else
+    epoch="$epoch:"
+  fi
+  echo "$epoch$pkgver$pkgrel"
+}
+
+getPackageVersion() {
+  local name=$1
+  if [ "$(sudo pacman -Qs $name)" != "" ]; then
+    echo $(echo $(sudo pacman -Q $name) | sed -e "s/^$name //g")
+  fi
+}
+
+downloadArchive() {
+  local name=$1
+  installBaseDevel $1
+  cd ~/Downloads
+  curl -L -O $(getAURPackageNameAsURL $name)
+  tar -xzf "${name}.tar.gz"
+}
+
+removeArchive() {
+  local name=$1
+  cd ~/Downloads
+  rm -rf "${name}"
+  rm "${name}.tar.gz"
+}
+
+commonProcedure() {
+  local name=$1
+  local nick=$2
+  local RESET="\033[0m"
+  local RED="\033[0;31m"
+  local GREEN="\033[0;32m"
+  local BOLD="\033[1m"
+  downloadArchive $name
+  cd ~/Downloads
+  cd "${name}"
+  makepkg -Asc --needed --noconfirm
+  sudo pacman -U --needed --noconfirm ${name}*.pkg.tar.xz
+  if [[ $? -ne 0 ]] ; then
+    echo -e " ${RED}!${RESET} the package ${BOLD}${name}${RESET} was ${BOLD}not installed${RESET}"
+    exit 1
+  else
+    removeArchive $name
+    mkdir -p ~/.archibold/aur/$name
+    getPackageVersion $name >~/.archibold/aur/$name/version
+    if [ "$nick" = "" ]; then
+      nick=$name
+    fi
+    echo $nick>~/.archibold/aur/$name/nick
+    echo -e " ${GREEN}✔${RESET} ${BOLD}${name}${RESET} successfully ${BOLD}installed${RESET}"
+  fi
+}
+
+updateArchibold() {
+  local original=
+  local replacement=
+  local dropafter=
+  local dest=/home/$USER/Downloads
+  local target="$dest/archibold"
+  if [ "$2" = "--skip-update" ]; then
+    /usr/bin/echo "0"
+  else
+    if [ ! -d /home/$USER ]; then
+      dropafter='user'
+    else
+      if [ ! -d $dest ]; then
+        dropafter='dl'
+      fi
+    fi
+    /usr/bin/mkdir -p $dest
+    cd $dest
+    /usr/bin/sudo /usr/bin/curl -s -k -L -O https://webreflection.github.io/archibold.io/sh/archibold
+    /usr/bin/sync
+
+    if [ ! -f $target ]; then
+      /usr/bin/echo "0"
+      exit 1
+    fi
+    if [ "$(/usr/bin/sudo /usr/bin/wc -c $target)" = "0 $target" ]; then
+      /usr/bin/echo "0"
+      exit 1
+    fi
+
+    /usr/bin/sudo /usr/bin/chmod +x $target
+
+    original=$(/usr/bin/cat "$1" | /usr/bin/openssl dgst -sha256 -binary | /usr/bin/base64)
+    replacement=$(/usr/bin/cat "$target" | /usr/bin/openssl dgst -sha256 -binary | /usr/bin/base64)
+    if [ "$original" = "$replacement" ]; then
+      echo 'archibold already upgraded'
+      /usr/bin/sudo /usr/bin/rm  $target
+      if [ "$dropafter" = "dl" ]; then
+        /usr/bin/rm -rf /home/$USER/Downloads
+      else
+        if [ "$dropafter" = "user" ]; then
+          /usr/bin/rm -rf /home/$USER
+        fi
+      fi
+      sync
+      /usr/bin/echo "0"
+    else
+      /usr/bin/sudo /usr/bin/mv $target $1
+      /usr/bin/sync
+      if [ "$dropafter" = "dl" ];  then
+        /usr/bin/rm -rf /home/$USER/Downloads
+      else
+        if [ "$dropafter" = "user" ];  then
+          /usr/bin/rm -rf /home/$USER
+        fi
+      fi
+      /usr/bin/sync
+      /usr/bin/echo "1"
+    fi
+  fi
+}
+
+updateSyslinuxConfig() {
+  local boot=$1
+  local syslinux=$boot/syslinux/syslinux.cfg
+  local tmp=~/tmp_syslinux.cfg
+  local WIDTH=$2
+  local HEIGHT=$3
+  cat $syslinux | sed -e "s/MENU RESOLUTION [0-9]* [0-9]*/MENU RESOLUTION $WIDTH $HEIGHT/">$tmp
+  sudo cp $tmp $syslinux
+  rm $tmp
+}
+
+upgradeAURPackaged() {
+  local name=$1
+  local RESET="\033[0m"
+  local BOLD="\033[1m"
+  local folder="/home/$USER/.archibold"
+  local pkg=
+  local current=
+  local remote=
+  if [ -d $folder ]; then
+    for pkg in $(ls $folder/aur/); do
+      current=$(getPackageVersion $pkg)
+      remote=$(getAURPackageVersion $pkg)
+      if [ "$current" != "$remote" ];  then
+        echo -e " updating ${BOLD}$pkg${RESET}"
+        commonProcedure "$pkg" "$(cat $folder/aur/$pkg/nick)"
+      else
+        echo -e " ${GREEN}✔${RESET} ${BOLD}$pkg${RESET} already updated"
+      fi
+    done
+  fi
+}
+
+installBaseDevel() {
+  echo 'updating development packages ...'
+  sudo pacman -S --needed --noconfirm base-devel git diffstat chrpath wget cpio pv > /dev/null 2>&1
+  # dd if=/dev/urandom | pv | dd of=/dev/null
+}
+
+resetKeys() {
+  sudo dirmngr </dev/null
+  sudo pacman -Sy --noconfirm
+  sudo pacman-key -u
+  sudo pacman-key --populate archlinux
+  sudo pacman-key --refresh-keys
+}
+
+updateOSInfo() {
+  sudo pacman -Sy --noconfirm
+  sudo pacman-db-upgrade
+}
+
+archibold() {
+  local RESET="\033[0m"
+  local RED="\033[0;31m"
+  local GREEN="\033[0;32m"
+  local YELLOW="\033[1;33m"
+  local BOLD="\033[1m"
+  local UPDATED=" ${GREEN}✔${RESET} ${BOLD}archibold${RESET} successfully updated"
+  local AUR
+  local WIDTH=$2
+  local HEIGHT=$3
+  case $1 in
+    archibold)
+      if [ "$(updateArchibold $0)" = "1" ]; then
+        /usr/bin/echo -e "$UPDATED"
+      fi
+      ;;
+    update)
+      if [ "$(updateArchibold $0)" = "1" ]; then
+        /usr/bin/echo -e "$UPDATED"
+      fi
+      updateOSInfo $0
+      ;;
+    reset-keys)
+      resetKeys $0
+      ;;
+    upgrade-aur)
+      upgradeAURPackaged 'all'
+      ;;
+    upgrade)
+      if [ "$(updateArchibold $0 $2)" = "1" ]; then
+        /usr/bin/echo -e "$UPDATED"
+        /usr/bin/echo ''
+        /usr/bin/echo '  please restart the upgrade'
+        /usr/bin/echo ''
+        exit 0
+      else
+        if [ -f "/usr/bin/gnome-shell" ]; then
+          AUR=$(/usr/bin/gnome-shell --version)
+          if [ "$AUR" != "$(/usr/bin/echo $AUR | /usr/bin/sed -e 's/3\.14//g')" ]; then
+            AUR="1"
+          else
+            AUR="0"
+          fi
+        fi
+        updateOSInfo $0
+        if [ "$WIDTH" = "--force" ]; then
+          /usr/bin/sudo /usr/bin/pacman -Su --force --noconfirm
+        else
+          /usr/bin/sudo /usr/bin/pacman -Su --noconfirm
+        fi
+        if [ -d "/boot/EFI" ]; then
+          if [ -f "/boot/vmlinuz-linux" ]; then
+            /usr/bin/echo 'Linux upgraded, moving files ...'
+            /usr/bin/sudo /usr/bin/mv /boot/{vmlinuz-linux,*.img} "/boot/EFI"
+          fi
+        else
+          if [ -d "/boot/efi" ]; then
+            if [ -f "/boot/vmlinuz-linux" ]; then
+              /usr/bin/echo 'Linux upgraded, moving files ...'
+              /usr/bin/sudo /usr/bin/mv /boot/{vmlinuz-linux,*.img} "/boot/efi"
+            fi
+          fi
+        fi
+        # should never happen on bootstrap
+        if [ "$AUR" = "1" ]; then
+          echo 'GNOME 3.14 upgraded, tweaking info ...'
+          dbus-launch gsettings set org.gnome.nautilus.icon-view default-zoom-level 'small'
+          dbus-launch gsettings set org.gnome.nautilus.list-view default-zoom-level 'small'
+          dbus-launch gsettings set org.gnome.Epiphany.web enable-webaudio true
+          dbus-launch gsettings set org.gnome.Epiphany.web enable-webgl true
+        fi
+      fi
+      ;;
+    autoupgrade)
+      if [ "$2" = "off" ]; then
+        if [ -f /etc/systemd/system/autoupgrade.service ]; then
+          sudo systemctl disable autoupgrade
+          sudo rm -rf /etc/systemd/system/autoupgrade.service
+          echo -e " ${GREEN}✔${RESET} ${BOLD}removed${RESET} automatic upgrades"
+        else
+          echo " automatic upgrades were already disabled"
+        fi
+        if [ -f /etc/systemd/system/autoupgrade.timer ]; then
+          sudo systemctl disable /etc/systemd/system/autoupgrade.timer
+          sudo rm -rf /etc/systemd/system/autoupgrade.timer
+        fi
+      else
+        echo -e " ${GREEN}✔${RESET} setting up ${BOLD}automatic upgrades${RESET}"
+        echo '[Unit]
+Description=archibold automatic upgrade
+After=network.target 
+
+[Service]
+User=root
+Type=simple
+ExecStart=/usr/bin/archibold upgrade --skip-update
+TimeoutStopSec=180
+KillMode=process
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target'>~/autoupgrade.service
+        sudo mv ~/autoupgrade.service /etc/systemd/system/autoupgrade.service
+        sudo systemctl enable autoupgrade
+        echo '[Unit]
+Description=Automatic Update when booted up after 5 minutes then check the system for updates every 45 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=45min
+Unit=autoupgrade.service
+
+[Install]
+WantedBy=multi-user.target'>~/autoupgrade.timer
+        sudo mv ~/autoupgrade.timer /etc/systemd/system/autoupgrade.timer
+        sudo systemctl enable autoupgrade.timer
+      fi
+      ;;
+    clean)
+      sudo pacman -Sc --noconfirm
+      ;;
+    resplash)
+      cd ~/Downloads
+      AUR=$(sudo pacman -Qs fbset)
+      if [ "$AUR" = "" ]; then
+        sudo pacman -S --needed --noconfirm fbset
+      fi
+      if [ "$WIDTH" = "" ]; then
+        WIDTH=$(sudo fbset | grep 'mode ' | sed -e 's/mode "//' | sed -e 's/x.*//')
+      fi
+      if [ "$HEIGHT" = "" ]; then
+        HEIGHT=$(sudo fbset | grep 'mode ' | sed -e 's/mode "[0-9]*x//' | sed -e 's/"//')
+      fi
+      if [ "$AUR" = "" ]; then
+        sudo pacman -Rsc --noconfirm fbset
+      fi
+      AUR=$(sudo pacman -Qs inkscape)
+      if [ "$AUR" = "" ]; then
+        sudo pacman -S --needed --noconfirm inkscape
+      fi
+      curl -L -O https://webreflection.github.io/archibold.io/img/archibold.svg
+      inkscape \
+        --export-png=archibold.png \
+        --export-width=$WIDTH \
+        --export-height=$HEIGHT \
+        archibold.svg
+      convert archibold.png -quality 100% archibold.jpg
+      if [ -d "/boot/EFI/syslinux" ]; then
+        echo "moving new ${WIDTH}x${HEIGHT} splash into /boot/EFI"
+        sudo cp archibold.jpg /boot/EFI
+        updateSyslinuxConfig "/boot/EFI" "$WIDTH" "$HEIGHT"
+      else
+        if [ -d "/boot/efi/syslinux" ]; then
+          echo "moving new ${WIDTH}x${HEIGHT} splash into /boot/efi"
+          sudo cp archibold.jpg /boot/efi
+          updateSyslinuxConfig "/boot/efi" "$WIDTH" "$HEIGHT"
+        else
+          echo "moving new ${WIDTH}x${HEIGHT} splash into /boot"
+          sudo cp archibold.jpg /boot
+          updateSyslinuxConfig "/boot" "$WIDTH" "$HEIGHT"
+        fi
+      fi
+      echo "updated background size as ${WIDTH}x${HEIGHT}"
+      rm archibold.{jpg,png,svg}
+      if [ "$AUR" = "" ]; then
+        sudo pacman -Rsc --noconfirm inkscape
+      fi
+      ;;
+    search)
+      AUR=$(sudo pacman -Ssq $2 | grep ^$2$)
+      if [ "$AUR" != "" ]; then
+        echo -e " ${GREEN}✔${RESET} Official ${BOLD}${2}${RESET} package available"
+      else
+        if [ "$(curl -s -I $(getAURPackageNameAsURL $2) | grep '404')" = "" ]; then
+          echo -e " ${YELLOW}✓${RESET} ${BOLD}${2}${RESET} available via ${BOLD}AUR${RESET}"
+        else
+          AUR=$(sudo pacman -Ss $2)
+          if [ "$AUR" = "" ]; then
+            echo -e " ${RED}!${RESET} Unable to find ${BOLD}${2}${RESET} package."
+          else
+            echo "$AUR"
+          fi
+        fi
+      fi
+      ;;
+    install)
+      case $2 in
+        ab-android)
+          sudo pacman -S --needed --noconfirm jdk8-openjdk android-udev android-tools apache-ant
+          # sudo pacman -S --needed --noconfirm gcc git gnupg flex bison gperf sdl wxgtk squashfs-tools curl ncurses zlib schedtool perl-switch zip unzip libxslt python2-virtualenv bc
+          commonProcedure 'android-sdk' 'ab-android'
+          commonProcedure 'android-sdk-platform-tools' 'ab-android'
+          commonProcedure 'android-sdk-build-tools' 'ab-android'
+          commonProcedure 'android-platform' 'ab-android'
+          sudo groupadd sdkusers
+          sudo gpasswd -a $USER sdkusers
+          export ANDROID_HOME=/opt/android-sdk
+          echo '
+# needed by PhoneGap
+ANDROID_HOME=/opt/android-sdk
+PATH="$PATH:$ANDROID_HOME/tools"'>>~/.bashrc
+          sudo chown -R :sdkusers /opt/android-sdk/
+          sudo chmod -R g+w /opt/android-sdk/
+          echo '
+SUBSYSTEM=="usb", ATTR{idVendor}=="[VENDOR ID]", MODE="0666"
+SUBSYSTEM=="usb",ATTR{idVendor}=="[VENDOR ID]",ATTR{idProduct}=="[PRODUCT ID]",SYMLINK+="android_adb"
+SUBSYSTEM=="usb",ATTR{idVendor}=="[VENDOR ID]",ATTR{idProduct}=="[PRODUCT ID]",SYMLINK+="android_fastboot"
+'>>51-android.rules
+          sudo mv 51-android.rules /etc/udev/rules.d/
+          sudo udevadm control --reload-rules
+          echo ''
+          echo 'unplug and re-plug your device, if any'
+          echo ''
+          ;;
+        ab-chromium)
+          sudo pacman -S --needed --noconfirm chromium
+          commonProcedure 'chromium-pepper-flash' 'ab-chromium'
+          commonProcedure 'chromium-widevine' 'ab-chromium'
+          ;;
+        ab-dev)
+          installBaseDevel $1
+          ;;
+        ab-espruino-pico)
+          sudo groupadd plugdev
+          sudo gpasswd -a $USER plugdev
+          echo '# To go in /etc/udev/rules.d/
+# Makes Espruino s serial port accessible to non-SU users, and stops the Modem Manager trying to enumerate it
+ATTRS{idProduct}=="5740", ATTRS{idVendor}=="0483", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0666", GROUP="plugdev"'>~/Downloads/45-espruino.rules
+          sudo mv ~/Downloads/45-espruino.rules /etc/udev/rules.d/
+          ;;
+        ab-fonts)
+          sudo pacman -S --needed --noconfirm ttf-dejavu ttf-liberation ttf-symbola ttf-droid
+          ;;
+        ab-fs-extra)
+          sudo pacman -S --needed --noconfirm exfat-utils fuse-exfat dosfstools
+          ;;
+        ab-intel-cstick-wifi)
+          installBaseDevel $1
+          sudo pacman -S --needed --noconfirm linux-headers
+          cd ~/Downloads
+          git clone https://github.com/hadess/rtl8723bs
+          cd rtl8723bs
+          make
+          sudo make install
+          cd ..
+          rm -rf rtl8723bs
+          ;;
+        ab-git)
+          if [ "$GIT_USER" != "" ]; then
+            if [ "$GIT_EMAIL" != "" ]; then
+              sudo pacman -S --needed --noconfirm git
+              git config --global user.name "$GIT_USER"
+              git config --global user.email "$GIT_EMAIL"
+              git config --global push.default simple
+              sudo pacman -S --needed --noconfirm openssh xclip
+              ssh-keygen -t rsa -C "$GIT_EMAIL"
+              eval "$(ssh-agent -s)"
+              ssh-add ~/.ssh/id_rsa
+              echo '
+Time to add your key in GitHub.'
+              read -n1 -r -p "Press any key to copy to clipboard" key
+              cat ~/.ssh/id_rsa.pub | xclip -selection clipboard
+              echo 'You can now add your key in https://github.com/settings/ssh'
+              exit 1
+            fi
+          fi
+          echo 'Please specify a GIT_USER and a GIT_EMAIL'
+          exit 1
+          ;;
+        ab-heroku)
+          sudo pacman -S --needed --noconfirm ruby
+          cd ~/Downloads
+          curl -L -O https://toolbelt.heroku.com/install.sh
+          sh install.sh
+          rm install.sh
+          ;;
+        ab-pad)
+          sudo pacman -S --needed --noconfirm dosfstools usbmuxd gvfs-afc gvfs-afp gvfs-goa gvfs-gphoto2 gvfs-mtp gvfs-smb
+          ;;
+        ab-telegram)
+          cd ~/Downloads
+          if [ "$(uname -m)" = "x86_64" ]; then
+            curl -o telegram-setup.tar.xz -L "https://tdesktop.com/linux"
+          else
+            curl -o telegram-setup.tar.xz -L "https://tdesktop.com/linux32"
+          fi
+          tar xvfJ telegram-setup.tar.xz
+          rm telegram-setup.tar.xz
+          echo "[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Name=Telegram
+Comment=Official desktop version of Telegram messaging app
+Exec=${HOME}/Telegram/Telegram -- %u
+Icon=${HOME}/Telegram/Telegram.svg
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;
+MimeType=application/x-xdg-protocol-tg;x-scheme-handler/tg;
+X-Desktop-File-Install-Version=0.22">Telegram/telegram.desktop
+          if [ -d "${HOME}/Telegram" ]; then
+            rm -rf "${HOME}/Telegram"
+          fi
+          cp -r Telegram "${HOME}/"
+          cd "${HOME}/Telegram"
+          curl -o Telegram.svg -L "https://upload.wikimedia.org/wikipedia/commons/d/dd/Telegram_alternative_logo.svg"
+          sudo install -Dm644 "telegram.desktop" "/usr/share/applications/telegram.desktop"
+          ;;
+        ab-virtualbox)
+          sudo pacman -S --needed --noconfirm virtualbox qt4
+          echo 'vboxdrv
+vboxnetadp
+vboxnetflt
+vboxpci'>~/virtualbox.conf
+          sudo mv ~/virtualbox.conf /etc/modules-load.d/virtualbox.conf
+          sudo modprobe vboxdrv
+          sudo modprobe vboxnetadp
+          sudo modprobe vboxnetflt
+          sudo modprobe vboxpci
+          ;;
+        ab-nodejs)
+          sudo pacman -S --needed --noconfirm npm nodejs
+          mkdir -p ~/.npm-packages/bin
+          npm config set prefix '~/.npm-packages'
+          echo '
+# npm and nodejs global modules
+export PATH="$PATH:$HOME/.npm-packages/bin"
+export NODE_PATH="$NODE_PATH:$HOME/.npm-packages/lib/node_modules"
+'>>~/.bashrc
+          echo ''
+          echo 'Please add your npm info (if any)'
+          echo ''
+          npm adduser
+          ;;
+        *)
+          installation $2
+          ;;
+      esac
+      ;;
+    install-aur)
+      aurinstallation $2
+      ;;
+    uninstall)
+      archibold remove $2
+      ;;
+    use)
+      case $2 in
+        python2)
+          AUR=$(which python)
+          sudo rm -f $AUR
+          sudo ln -s $(which python2) $AUR
+          echo -e "now using ${BOLD}python2${RESET} $(python --version)"
+        ;;
+        python3)
+          AUR=$(which python)
+          sudo rm -f $AUR
+          sudo ln -s $(which python3) $AUR
+          echo -e "now using ${BOLD}python3${RESET} $(python --version)"
+        ;;
+        *)
+          echo -e "
+${BOLD}archibold use [options]${RESET}
+
+  python2
+  python3
+"
+        ;;
+      esac
+      ;;
+    show-gnome-settings)
+      for schema in `gsettings list-schemas`; do
+        for key in `gsettings list-keys $schema`; do
+          echo "$schema $key $(gsettings get $schema $key)"
+        done
+      done
+      ;;
+    swap)
+      if [ -f "/swap" ]; then
+        AUR="no"
+        echo "Disabling current /swap ..."
+        sudo swapoff /swap
+        sudo rm -f /swap
+      fi
+      echo "Creating $2MB of /swap ..."
+      sudo dd if=/dev/zero of=/swap bs=1M count=$2
+      sudo chmod 600 /swap
+      sudo mkswap /swap
+      sudo swapon /swap
+      if [ "$AUR" != "no" ]; then
+        if [ -f "/etc/fstab" ]; then
+          cat /etc/fstab >>~/__________________fstab
+          echo '/swap none swap defaults 0 0' >>~/__________________fstab
+          sudo mv ~/__________________fstab /etc/fstab
+        fi
+      fi
+      ;;
+    remove)
+      if [ "$2" != "" ]; then
+        # if package actually known/installed
+        if [ "$(sudo pacman -Qs $2)" != "" ]; then
+          sudo pacman -Rsc $2
+          sync
+          sleep 1
+          # verify that it was removed
+          if [ "$(sudo pacman -Qs $2)" = "" ]; then
+            # and if it was from AUR
+            if [ -d ~/.archibold/aur/$2 ]; then
+              # remove its folder too
+              rm -rf ~/.archibold/aur/$2
+            fi
+          fi
+        else
+          # it could be a package from AUR
+          # installed through a nick name
+          archibold remove $(findFromAURAndRemove $2)
+        fi
+      else
+        echo "nothing to do"
+      fi
+      ;;
+    remove-aur)
+      if [ -d ~/.archibold/aur/$2 ]; then
+        # remove its folder too
+        sudo rm -rf ~/.archibold/aur/$2
+      fi
+      ;;
+    ui)
+      installBaseDevel ''
+      echo 'checking gtk3, gjs and gksu ...'
+      sudo pacman -S --needed --noconfirm gtk3 gjs gksu > /dev/null 2>&1
+      mkdir -p ~/.archibold/tmp
+      cd ~/.archibold/tmp
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/archibold-upgrade
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/archibold-upgrade.png
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/archibold-upgrade.desktop.in
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/autogen.sh
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/Makefile.am
+      curl -L -O https://webreflection.github.io/archibold.io/archibold-upgrade/configure.ac
+      chmod +x archibold-upgrade
+      chmod +x autogen.sh
+      ./autogen.sh
+      sudo make install
+      sudo mv archibold-upgrade.png "$(which archibold-upgrade).png"
+      sudo cp "$(which archibold-upgrade)" "$(which archibold-upgrade).gjs"
+      echo '#!/usr/bin/env bash' > archibold-upgrade
+      echo 'sleep 1 && gksudo archibold-upgrade.gjs' >> archibold-upgrade
+      chmod +x archibold-upgrade
+      sudo mv archibold-upgrade "$(which archibold-upgrade)"
+      rm -rf ~/.archibold/tmp
+      echo ''
+      echo -e "You can use ${BOLD}archibold-upgrade${RESET} program directly now"
+      echo ''
+      cd -
+      ;;
+    ui-remove)
+      cd "$(dirname "$(which archibold-upgrade)")"
+      sudo rm -f archibold-upgrade*
+      cd '/usr/local/share/applications'
+      sudo rm -f archibold-upgrade.desktop
+      ;;
+    login-background)
+      updateLoginBackground $2
+      ;;
+    *)
+      echo -e "
+${BOLD} __________________
+|                  |
+| archibold v0.5.3 |
+|__________________|${RESET}
+
+ ${BOLD}usage${RESET}:
+
+  archibold [clean|reset-keys|update|upgrade|upgrade-aur]
+  archibold [install|remove|search|install-aur] package-name
+  archibold [login-background|resplash|ui]
+
+ ${BOLD}list of included AUR packages${RESET}:
+
+  acroread                # Adobe Acrobat Reader
+  broadcom-wl-dkms        # Broadcom wifi
+  dropbox                 # Dropbox client
+  spotify                 # music baby!
+  sublime3                # Sublime 3 (requires a valid license)
+  yaourt                  # Yet AnOther User Repository Tool
+
+ ${BOLD}list of simplified installations${RESET}:
+
+  ab-android              # android-sdk and development
+  ab-chromium             # Chromium with pepper-flash and DRM
+  ab-espruino-pico        # configure group and rules for pico
+  ab-fonts                # install common fonts (non GNOME only)
+  ab-fs-extra             # (ex)fat utilities
+  ab-git                  # git + ssh key configuration
+  ab-heroku               # configure heroku
+  ab-nodejs               # nodejs + npm configuration
+  ab-pad                  # recognizes external devices
+  ab-telegram             # install Telegram IM
+  ab-virtualbox           # virtualbox + configuration
+  ab-intel-cstick-wifi    # compute stick wifi module
+
+"
+      ;;
+  esac
+}
+
+archibold "$@"
