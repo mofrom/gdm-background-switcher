@@ -25,4 +25,7 @@ do
 	fi
 done
 ################################
-./archibold login-background $bgfile
+ssa="${bgfile##*.}"
+cp $bgfile ~/图片/AutoWallpaper/background.$ssa
+
+./archibold login-background ~/图片/AutoWallpaper/background.$ssa
