@@ -46,9 +46,9 @@ ExecStart=/root/gdm-switcher.sh
 WantedBy=multi-user.target
 EOF
 chmod +x archibold
-sudo cp archibold /usr/bin
+sudo cp archibold /usr/bin/
 sudo cp gdm-background-switcher.service /etc/systemd/system/
 sudo cp gdm-switcher.sh /root/
 sudo systemctl daemon-reload
 sudo systemctl enable gdm-background-switcher
-cp auto-switcher.sh ${HOME}/.auto-switcher.sh
+sudo cp auto-switcher.sh /usr/bin/
