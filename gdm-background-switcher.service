@@ -1,0 +1,7 @@
+[Unit]
+Description=gdm-background-switcher
+Before=gdm.service
+[Service]
+ExecStart=/root/gdm-switcher.sh
+[Install]
+WantedBy=multi-user.target

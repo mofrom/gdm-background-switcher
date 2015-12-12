@@ -143,8 +143,8 @@ updateLoginBackground() {
   sync
   glib-compile-resources "${GSTRES}.xml"
 
-  sudo mv "/usr/share/gnome-shell/$GSTRES" "/usr/share/gnome-shell/${GSTRES}.backup"
-  sudo mv "$GSTRES" /usr/share/gnome-shell/
+
+  mv "$GSTRES" ${HOME}/图片/AutoWallpaper/
 
   rm -r $WORKDIR
 
@@ -446,7 +446,7 @@ archibold() {
         echo -e " ${GREEN}✔${RESET} setting up ${BOLD}automatic upgrades${RESET}"
         echo '[Unit]
 Description=archibold automatic upgrade
-After=network.target 
+After=network.target
 
 [Service]
 User=root
