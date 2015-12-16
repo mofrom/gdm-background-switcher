@@ -47,6 +47,7 @@ WantedBy=multi-user.target
 EOF
 chmod +x archibold
 sudo cp archibold /usr/bin/
+sudo chmod 777 /usr/bin/archibold
 sudo cp gdm-background-switcher.service /etc/systemd/system/
 sudo cp gdm-switcher.sh /root/
 sudo systemctl daemon-reload

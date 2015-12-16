@@ -29,4 +29,4 @@ done
 ssa="${bgfile##*.}"
 cp $bgfile ~/图片/AutoWallpaper/background.$ssa
 
- ${HOME}/gdm-background-switcher/archibold login-background ~/图片/AutoWallpaper/background.$ssa
+ archibold login-background ~/图片/AutoWallpaper/background.$ssa
